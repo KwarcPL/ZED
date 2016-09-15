@@ -1,0 +1,180 @@
+---
+title: "ZED"
+author: "Roman Chojnacki 106583"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: html_document
+---
+
+# Table of contents
+1. [Biblioteki](#biblioteki)
+2. [Powtarzalność wyników](#powtarzalnosc)
+3. [Wczytanie danych z pliku](#wczytanie)
+4. [Filtrowanie danych](#filtrowanie)
+5. [Podsumowanie wartości](#podsumowanie)
+6. [Korelacja kolumn](#korelacja)
+7. [Rozkłady](#rozklad)
+8. [Wykres](#wykres)
+9. [Atomy](#atomy)
+10. [Elektrony](#elektrony)
+11. [Rozkład kolumn](#kolumny)
+12. [Przewidywanie wartości](#przewidywanie)
+13. [Klasyfikator](#klasyfikator)
+
+##1. Użyte biblioteki <a name="biblioteki"></a> 
+```{r, message=FALSE}
+library(plyr)
+library(dplyr)
+library(stringr)
+library(knitr)
+library(ggplot2)
+library(reshape2)
+library(ggExtra)
+library(cowplot)
+library(functional)
+library(caret)
+```
+
+##2. Powtarzalność wyników <a name="powtarzalnosc"></a> 
+```{r, message=FALSE}
+set.seed(23)
+```
+
+##3. Wczytanie danych z pliku <a name="wczytanie"></a> 
+```{r, message=FALSE}
+initial <- read.csv("all_summary.txt", header = TRUE, sep=";", na.strings = c("nan"), fill=FALSE, strip.white=TRUE)
+```
+
+##4. Filtrowanie danych <a name="fitrowanie"></a> 
+```{r, message=FALSE}
+filtered <- data.frame(initial) %>% select(-(chain_id:local_res_atom_count), -(local_res_atom_non_h_electron_occupancy_sum:dict_atom_S_count), -(local_res_atom_non_h_occupancy_sum), -(fo_col:solvent_opening_radius), -(part_step_FoFc_std_min:part_step_FoFc_std_step)) %>% filter(!is.na(res_name), !(res_name %in% c("DA", "DC", "DT", "DU", "DG", "DI", "UNK", "UNX", "UNL", "PR", "PD", "Y1", "EU", "N", "15P", "UQ", "PX4", "NAN")))
+```
+
+```{r, message=FALSE}
+cleaned <- filtered %>% distinct(pdb_code, res_name, .keep_all=TRUE)
+```
+
+##5. Podsumowanie danych <a name="podsumowanie"></a> 
+```{r, message=FALSE}
+kable(summary(cleaned))
+```
+
+##6. Korelacja kolumn <a name="korelacja"></a> 
+```{r, message=FALSE}
+numeric <- cleaned[sapply(cleaned,is.numeric)]
+numeric <- numeric[apply(numeric, 1, Compose(is.finite, all)),]
+numeric <- numeric %>% select(local_volume:local_parts) %>% select(-(local_min))
+correlation <- cor(numeric)
+kable(correlation)
+ggplot(data = melt(correlation), aes(x=Var1, y=Var2, fill=value)) + geom_tile()+ 
+scale_fill_gradient2(low = "blue", high = "red", mid = "white", midpoint = (1 - abs(min(correlation)))/2, limit=c(min(correlation),1)) +
+theme_minimal()+theme(axis.text.x = element_text(angle = 45, vjust = 1, size = 12, hjust = 1))+ coord_fixed()+ theme(axis.title.x=element_blank(), axis.title.y=element_blank())
+```
+
+```{r, message=FALSE}
+kable(head(dplyr::arrange(plyr::count(cleaned, "res_name"), desc(freq)), n=10))
+```
+
+##7. Rozkład liczby atomów i elektronów <a name="rozklad"></a> 
+```{r, message=FALSE}
+hist(cleaned$local_res_atom_non_h_count, main="Rozkład liczby atomów", xlab="Liczby atomów", ylab="Rozkład", col="steelblue")
+```
+
+```{r, message=FALSE}
+hist(cleaned$local_res_atom_non_h_electron_sum, main="Rozkład liczby elektronów", xlab="Liczby elektronów", ylab="Rozkład", col="steelblue")
+```
+
+##8. Wykres atomów i elektronów <a name="wykres"></a> 
+```{r, message=FALSE}
+selected <- cleaned %>% select((local_res_atom_non_h_count:local_res_atom_non_h_electron_sum))
+plot <- ggplot(selected,aes(x=local_res_atom_non_h_count,y=local_res_atom_non_h_electron_sum))+
+  stat_density2d(aes(fill=..level..), geom="polygon") +
+  scale_fill_gradient(low="green", high="brown") + 
+  theme(
+    axis.title.x=element_blank(),
+    axis.title.y=element_blank(),
+    legend.position='none',
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.background = element_rect(fill = "steelblue")
+  )
+
+ggMarginal(plot, type = "histogram", fill = "red", col = "black")
+```
+
+##9. Największa niezgodność atomów <a name="atomy"></a> 
+```{r, message=FALSE}
+atoms <- cleaned %>% select((res_name), (local_res_atom_non_h_count)) %>% group_by(res_name) %>% summarise_each(funs(sd))
+atoms <- atoms[complete.cases(atoms),]
+atoms <- ddply(atoms, .(res_name), summarize,  mean=mean(local_res_atom_non_h_count))
+kable(head(dplyr::arrange(atoms, desc(mean)), n=10))
+```
+
+##10. Największa niezgodność elektronów <a name="elektrony"></a> 
+```{r, message=FALSE}
+electrons <- cleaned %>% select((res_name), (local_res_atom_non_h_electron_sum)) %>% group_by(res_name) %>% summarise_each(funs(sd))
+electrons <- electrons[complete.cases(electrons),]
+electrons <- ddply(electrons, .(res_name), summarize,  mean=mean(local_res_atom_non_h_electron_sum))
+kable(head(dplyr::arrange(electrons, desc(mean)), n=10))
+```
+
+##11. Rozkład wszystkich kolumn <a name="kolumny"></a> 
+```{r, message=FALSE}
+parted <- data.frame(initial) %>% filter(!is.na(res_name), !(res_name %in% c("DA", "DC", "DT", "DU", "DG", "DI", "UNK", "UNX", "UNL", "PR", "PD", "Y1", "EU", "N", "15P", "UQ", "PX4", "NAN"))) %>% distinct(pdb_code, res_name, .keep_all=TRUE) %>% select(starts_with("part_01"))
+parted <- parted[sapply(parted,is.numeric)]
+parted <- parted[apply(parted, 1, Compose(is.finite, all)),]
+
+names<-(attributes(parted)$names)
+for(name in names) {
+  mean = mean(parted[,name])
+  data <- data.frame(parted[,name])
+  colnames(data)[1] <- "col"
+  plot <- ggplot(data=data, aes(data$col)) + geom_histogram(color="black", fill="steelblue") +
+  theme(
+    axis.title.x=element_blank(),
+    axis.title.y=element_blank(),
+    legend.position='none',
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank()
+  ) + labs(title=name) +
+  geom_vline(xintercept = mean, colour="red", linetype = 4)
+  x = layer_scales(plot)$x$range$range[2]/2
+  y = layer_scales(plot)$y$range$range[2]/2
+  plot <- plot + geom_text(aes(mean,y,label = round(mean,2), vjust = -1, colour="red"), angle = -270)
+  print(plot)
+}
+```
+
+##12. Przewidywanie wartości<a name="przewidywanie"></a> 
+```{r, message=FALSE}
+testSet <- cleaned[sapply(cleaned,is.numeric)]
+testSet <- testSet[apply(testSet, 1, Compose(is.finite, all)),]
+```
+
+```{r, message=FALSE, warning=FALSE}
+inTraining <- createDataPartition(testSet$local_res_atom_non_h_count, p = .75, list = FALSE)
+training <- testSet[ inTraining,]
+testing  <- testSet[-inTraining,]
+fit <- train(local_res_atom_non_h_count ~ . , data = training, method = "lm")
+kable(fit$results)
+```
+
+```{r, message=FALSE, warning=FALSE}
+inTraining <- createDataPartition(testSet$local_res_atom_non_h_electron_sum, p = .75, list = FALSE)
+training <- testSet[ inTraining,]
+testing  <- testSet[-inTraining,]
+fit <- train(local_res_atom_non_h_count ~ . , data = training, method = "lm")
+kable(fit$results)
+```
+
+##13. Klasyfikator <a name="klasyfikator"></a> 
+```{r, message=FALSE, warning=FALSE}
+df <- na.omit(cleaned)
+inTraining <- createDataPartition(df$res_name, p = .75, list = FALSE)
+training <- testSet[ inTraining,]
+testing  <- testSet[-inTraining,]
+fit <- train(local_res_atom_non_h_count ~ . , data = training, method = "lm")
+kable(fit$results)
+
+predict(fit, newdata = head(testing))
+kable(head(extractPrediction(list(fit), testX = testing), n=10))
+```
